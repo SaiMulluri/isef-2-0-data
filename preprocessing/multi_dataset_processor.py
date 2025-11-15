@@ -1,4 +1,12 @@
-"""Multi-dataset preprocessing pipeline for Alzheimer's metabolomics cohorts."""
+"""Multi-dataset preprocessing pipeline for Alzheimer's metabolomics cohorts.
+
+This module orchestrates a research-only preprocessing workflow that ingests
+human metabolomics cohorts registered in :mod:`dataset_registry`. The
+implementation focuses on harmonising heterogeneous files, deriving pathway
+scores, and preparing machine-learning-ready matrices for downstream research
+exploration. It must **not** be used for diagnostic or clinical decision
+making.
+"""
 
 from __future__ import annotations
 
@@ -126,7 +134,14 @@ class DatasetArtifacts:
 
 
 class MultiDatasetProcessor:
-    """Process all registered human metabolomics datasets."""
+    """Process all registered human metabolomics datasets.
+
+    The processor dynamically discovers cohorts via the central registry so it
+    can scale to dozens of Alzheimer-related datasets without code changes. All
+    transformations—including harmonisation, quality control, and normalisation
+    routines—are intended solely for exploratory research workflows, not for
+    clinical or diagnostic usage.
+    """
 
     def __init__(
         self,
@@ -457,6 +472,7 @@ class MultiDatasetProcessor:
 
 
 def main() -> None:
+    """Run the end-to-end preprocessing workflow for research exploration."""
     logging.basicConfig(level=logging.INFO)
     processor = MultiDatasetProcessor()
     try:
