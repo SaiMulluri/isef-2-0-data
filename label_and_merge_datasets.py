@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from preprocessing.mwtab_labeler import MW_DATASET_CONFIG, MwStudyConfig, attach_labels_to_datatable
 
 DATA_DIR = Path("data")
 MW_PATTERN = DATA_DIR / "metabolomics_workbench" / "*" / "*_datatable.txt"
@@ -50,35 +51,49 @@ def normalize_feature_name(name: str) -> str:
     return name.strip("_") or "feature"
 
 
-def process_single_file(path: Path) -> Optional[pd.DataFrame]:
-    try:
-        df = pd.read_csv(path, sep="\t", comment="#", dtype=str)
-    except Exception as exc:
-        print(f"Failed to read {path}: {exc}")
+def _map_labels(series: pd.Series, config: Optional[MwStudyConfig]) -> pd.Series:
+    if config is None:
+        return series.apply(lambda x: infer_label(str(x)) if pd.notna(x) else None)
+
+    positive = [k.lower() for k in config.positive_keywords]
+    negative = [k.lower() for k in config.negative_keywords]
+
+    def mapper(val: str) -> Optional[int]:
+        lower_val = str(val).lower()
+        if any(k in lower_val for k in positive):
+            return 1
+        if any(k in lower_val for k in negative):
+            return 0
         return None
 
+    return series.apply(mapper)
+
+
+def _process_dataframe(
+    df: pd.DataFrame,
+    path: Path,
+    sample_col: Optional[str],
+    phenotype_col: Optional[str],
+    config: Optional[MwStudyConfig],
+) -> Optional[pd.DataFrame]:
+    df = df.copy()
     if df.empty:
         print(f"Warning: {path} is empty.")
         return None
 
     columns = list(df.columns)
-    sample_col = find_column(columns, SAMPLE_KEY_CANDIDATES)
-    phenotype_col = find_column(columns, PHENOTYPE_KEY_CANDIDATES)
+    sample_col = sample_col or find_column(columns, SAMPLE_KEY_CANDIDATES)
+    phenotype_col = phenotype_col or find_column(columns, PHENOTYPE_KEY_CANDIDATES)
 
     if phenotype_col is None:
         print(f"Skipping {path}: phenotype column not found.")
         return None
 
     if sample_col is None:
-        # Create a synthetic sample ID column using the index.
         sample_col = "__sample_id__"
         df[sample_col] = [f"{path.stem}_{i}" for i in range(len(df))]
 
-    labels: List[Optional[int]] = []
-    for val in df[phenotype_col].fillna(""):
-        label = infer_label(str(val)) if val is not None else None
-        labels.append(label)
-
+    labels = _map_labels(df[phenotype_col].fillna(""), config)
     df["label"] = labels
     df = df.dropna(subset=["label"])
     if df.empty:
@@ -87,7 +102,6 @@ def process_single_file(path: Path) -> Optional[pd.DataFrame]:
 
     df["label"] = df["label"].astype(int)
 
-    # Convert feature columns to numeric where possible.
     exclude_cols = {sample_col, phenotype_col, "label"}
     feature_frames: Dict[str, pd.Series] = {}
     for col in columns:
@@ -108,11 +122,30 @@ def process_single_file(path: Path) -> Optional[pd.DataFrame]:
     return features_df
 
 
+def process_single_file(path: Path, study_id: Optional[str] = None) -> Optional[pd.DataFrame]:
+    config = MW_DATASET_CONFIG.get(study_id or "", None)
+    try:
+        if config:
+            df, label_col = attach_labels_to_datatable(study_id or "", path, config)
+            phenotype_col = label_col or None
+            sample_col = config.sample_column
+        else:
+            df = pd.read_csv(path, sep="\t", comment="#", dtype=str)
+            phenotype_col = None
+            sample_col = None
+    except Exception as exc:
+        print(f"Failed to read {path}: {exc}")
+        return None
+
+    return _process_dataframe(df, path, sample_col, phenotype_col, config)
+
+
 def merge_datasets() -> Tuple[pd.DataFrame, pd.Series]:
     processed_frames: List[pd.DataFrame] = []
     for path in sorted(Path().glob(str(MW_PATTERN))):
+        study_id = path.parent.name
         print(f"Processing {path}")
-        frame = process_single_file(path)
+        frame = process_single_file(path, study_id=study_id)
         if frame is not None:
             processed_frames.append(frame)
 
